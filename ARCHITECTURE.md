@@ -1,116 +1,201 @@
 # Architecture
 
-This document explains how the application is structured, how data flows through it end-to-end, and how each LangGraph graph is designed.
+This document covers the end-to-end application flow, state design, all three LangGraph graphs, and the UI configuration system.
 
 ---
 
-## End-to-End Application Flow
-User (Browser) │ ▼ Streamlit UI ── app.py calls main.py │ │ loadui.py renders sidebar: │ API keys, LLM selection, use case, timeframe ▼ GroqLLM (groqllm.py) │ │ Initializes ChatGroq with selected model + API key ▼ GraphBuilder (graph_builder.py) │ │ Picks the right graph-building method based on use case │ Compiles and returns a LangGraph runnable ▼ Graph Execution │ │ Streams or invokes the compiled graph with user message ▼ DisplayResultStreamlit (display_result.py) │ │ Routes output rendering by use case ▼ User sees response in chat UI
+## End-to-End Flow
+
+```
+User opens browser
+        │
+        ▼
+app.py  ──►  load_langgraph_agenticai_app()  (main.py)
+        │
+        ▼
+LoadStreamlitUI.load_streamlit_ui()  (loadui.py)
+  - Renders sidebar: LLM selector, model selector, API keys
+  - Renders use case selector
+  - For AI News: renders timeframe selector + Fetch button
+  - Returns user_controls dict
+        │
+        ▼
+GroqLLM(user_control_input).get_llm_model()  (groqllm.py)
+  - Reads GROQ_API_KEY and selected_groq_model from user_controls
+  - Returns a ChatGroq instance
+        │
+        ▼
+GraphBuilder(model).setup_graph(usecase)  (graph_builder.py)
+  - Picks the correct graph-building method based on usecase string
+  - Compiles and returns a runnable LangGraph graph
+        │
+        ▼
+DisplayResultStreamlit.display_result_on_ui()  (display_result.py)
+  - Streams or invokes the compiled graph
+  - Renders output in Streamlit chat UI based on use case
+        │
+        ▼
+User sees response
+```
+
+---
 
 ## Shared State
 
-All three graphs use the same `State` TypedDict from `state/state.py`:
+All graphs use the same `State` TypedDict defined in `state/state.py`:
 
-```python 
+```python
 class State(TypedDict):
     messages: Annotated[List, add_messages]
-add_messages is a LangGraph reducer — it appends new messages to the list instead of replacing them. This is what gives the chatbot conversational memory within a single session.
+```
 
-Graph 1 — Basic Chatbot File: basic_chatbot_node.py, graph_builder.py
+`add_messages` is a LangGraph reducer. Instead of replacing the messages list on each update, it appends to it. This is what gives the chatbot memory within a session — every node return is accumulated, not overwritten.
 
+---
+
+## Graph 1 — Basic Chatbot
+
+**Files:** `nodes/basic_chatbot_node.py`, `graph/graph_builder.py`
+
+```
 START → chatbot → END
+```
 
-chatbot node (BasicChatbotNode.process): Calls llm.invoke(state['messages']) and returns the AI response. The add_messages reducer accumulates the full conversation history automatically.
+**chatbot node** (`BasicChatbotNode.process`):
+Calls `llm.invoke(state['messages'])` and returns the AI response.
+The `add_messages` reducer accumulates the full conversation history automatically.
 
-When to use: Quick Q&A, no need for live data or external tools.
+**Use when:** Simple Q&A with no need for live data or external tools.
 
+---
 
+## Graph 2 — Chatbot With Web
 
-Graph 2 — Chatbot With Web File: chatbot_with_tool_node.py, search_tool.py, graph_builder.py
+**Files:** `nodes/chatbot_with_tool_node.py`, `tools/search_tool.py`, `graph/graph_builder.py`
 
-START → chatbot ──(has tool calls?)──► tools → chatbot → ...
-                └───────────────────► END
+```
+START
+  │
+  ▼
+chatbot ──── (LLM emits tool call?) ──YES──► tools
+  ▲                                              │
+  │                                              │
+  └──────────────────────────────────────────────┘
+  │
+  NO
+  │
+  ▼
+ END
+```
 
-chatbot node (ChatbotWithToolNode.create_chatbot): The LLM is bound to a Tavily search tool via .bind_tools(tools). If it decides it needs to search, it emits a tool call message instead of a direct answer.
+**chatbot node** (`ChatbotWithToolNode.create_chatbot`):
+The LLM is bound to Tavily via `.bind_tools(tools)`. If it decides a search is needed, it emits a tool call message instead of a direct answer.
 
-tools node (ToolNode from langgraph.prebuilt): Executes the Tavily search and returns a ToolMessage with the result.
+**tools node** (`ToolNode` from `langgraph.prebuilt`):
+Executes the Tavily search and returns a `ToolMessage` with the result back to `chatbot`.
 
-Routing — tools_condition (built-in LangGraph): Checks the last message. If it contains tool calls → routes to tools. Otherwise → routes to END.
+**Routing — `tools_condition`** (LangGraph built-in):
+Reads the last message. Tool calls present → route to `tools`. No tool calls → route to `END`.
 
-The loop tools → chatbot allows the LLM to reason over the search result and either answer or search again.
+The `tools → chatbot` loop lets the LLM reason over search results and decide whether to answer or search again.
 
-Tools defined in search_tool.py:
+**Tool definition in `search_tool.py`:**
 
-python
-
+```python
 def get_tools():
     return [TavilySearch(max_result=2)]
 
 def create_tool_node(tools):
     return ToolNode(tools=tools)
+```
 
+---
 
-Graph 3 — AI News Pipeline File: ai_news_node.py, graph_builder.py
+## Graph 3 — AI News Pipeline
+
+**Files:** `nodes/ai_news_node.py`, `graph/graph_builder.py`
+
+```
 START → fetch_news → summarize_news → save_result → END
+```
 
-This is a fully automated agentic pipeline. The user only picks the time frame — the graph does the rest.
-fetch_news node (AINewsNode.fetch_news):
+This is a fully automated pipeline. The user selects a time frame and clicks a button — the graph runs end-to-end without any further user input.
 
-Reads frequency (daily / weekly / monthly) from the first message
-Maps it to Tavily time range (d / w / m) and days (1 / 7 / 30)
-Calls Tavily with:
-Query: "Top Artificial Intelligence (AI) technology news India and globally"
-Topic: news
-Max results: 20
-include_answer: "advanced"
-Stores raw results in state['news_data']
-summarize_news node (AINewsNode.summarize_news):
+**fetch_news node** (`AINewsNode.fetch_news`):
 
-Takes the raw news items from fetch_news
-Sends them to the LLM with a structured prompt:
-Output format: Markdown
-Date headers (YYYY-MM-DD in IST)
-Concise summary per article
-Source URL as a link
-Sorted latest-first
-Stores the LLM response in state['summary']
-save_result node (AINewsNode.save_result):
+- Reads `frequency` from the first message (`daily` / `weekly` / `monthly`)
+- Maps frequency to Tavily params:
 
-Writes ./AINews/{frequency}_summary.md with the summary
-After graph completion, display_result.py reads this file and renders it with st.markdown()
-UI Configuration System
-All UI text and options come from uiconfigfile.ini
- — nothing is hardcoded in the Streamlit code.
+| Frequency | time_range | days |
+|---|---|---|
+| daily | `d` | 1 |
+| weekly | `w` | 7 |
+| monthly | `m` | 30 |
 
-ini
+- Calls Tavily with:
+  - Query: `"Top Artificial Intelligence (AI) technology news India and globally"`
+  - Topic: `news`
+  - Max results: `20`
+  - `include_answer: "advanced"`
+- Stores results in `state['news_data']`
 
+**summarize_news node** (`AINewsNode.summarize_news`):
+
+- Takes the raw news items
+- Sends them to the LLM with a structured prompt asking for:
+  - Markdown output
+  - Date headers in `YYYY-MM-DD` format (IST)
+  - One concise summary sentence per article
+  - Source URL as a clickable link
+  - Sorted latest-first
+- Stores the response in `state['summary']`
+
+**save_result node** (`AINewsNode.save_result`):
+
+- Writes `./AINews/{frequency}_summary.md`
+- After the graph finishes, `display_result.py` reads this file and renders it with `st.markdown()`
+
+---
+
+## UI Configuration System
+
+All UI labels, options, and model names live in `ui/uiconfigfile.ini`. Nothing is hardcoded in the Streamlit code.
+
+```ini
 [DEFAULT]
 PAGE_TITLE = LangGraph: Build Stateful Agentic AI LangGraph
 LLM_OPTIONS = Groq
 USECASE_OPTIONS = Basic Chatbot, Chatbot With Web, AI News
 GROQ_MODEL_OPTIONS = groq/compound, openai/gpt-oss-120b
-The Config class in uiconfigfile.py reads this file using ConfigParser and exposes four getter methods. LoadStreamlitUI uses these getters to build all dropdowns and labels.
+```
 
-To add a new LLM option or use case — update the .ini file. The UI picks it up automatically without touching any Streamlit code.
+The `Config` class (`uiconfigfile.py`) reads this file using `ConfigParser` and exposes four getter methods. `LoadStreamlitUI` uses these getters to build all dropdowns and labels dynamically.
 
+To add a new model or use case — update the `.ini` file. The UI picks it up automatically.
+
+---
 
 ## Adding a New Use Case
-1. Create a node file in nodes/ with your logic
-2. Add a new graph-building method in graph_builder.py
-3. Register the use case name in uiconfigfile.ini under USECASE_OPTIONS
-4. Add a display branch in display_result.py
-5. If the use case needs a new API key, add the input field in loadui.py
 
-## Key Design Decisions
-Why LangGraph over plain LangChain? 
-LangGraph gives you explicit control over state transitions. You can see exactly which node runs when, add conditional routing, and build loops — none of which is straightforward with LangChain's sequential chains.
+1. Create a node file in `nodes/` with your logic
+2. Add a graph-building method in `graph_builder.py`
+3. Add the use case name to `USECASE_OPTIONS` in `uiconfigfile.ini`
+4. Add a display branch in `display_result.py`
+5. If a new API key is needed, add the input field in `loadui.py`
 
-Why Groq? 
-Groq's inference API is significantly faster than most alternatives for open-weight models. It has a generous free tier which makes this project runnable without any cost.
+---
 
-Why Tavily for news fetching instead of RSS or scraping? 
-Tavily returns structured, pre-filtered results with metadata (URL, date, content snippet) in a single API call. It handles the complexity of news aggregation so the code stays focused on the agentic pipeline.
+## Design Decisions
 
-Why save AI News output to a .md file? 
-It decouples the generation step from the display step. The graph writes the file; the UI reads it. This means you can also access the summary outside the app, commit it, or diff it over time.
+**Why LangGraph instead of plain LangChain?**
+LangGraph gives explicit control over state transitions. You can see exactly which node runs when, add conditional routing, and build loops — things that are difficult to do cleanly with LangChain's sequential chains.
+
+**Why Groq?**
+Groq's inference API is significantly faster than most alternatives. It has a generous free tier, which makes this project runnable with zero cost.
+
+**Why Tavily for news instead of RSS or scraping?**
+Tavily returns structured results with metadata (URL, date, content) in a single API call and handles aggregation internally. It keeps the pipeline code focused on the agentic logic, not data wrangling.
+
+**Why write AI News output to a `.md` file?**
+It decouples generation from display. The graph writes the file; the UI reads it. The summary is also accessible outside the app — you can open it, commit it, or diff summaries over time.
 
