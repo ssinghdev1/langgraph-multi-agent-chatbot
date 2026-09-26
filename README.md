@@ -62,63 +62,64 @@ Easy to extend — new use case means a new node file + one line in the config
 
 ## 🏗️ System Architecture
 
+```
+   User (Browser)
+            │
+            ▼
+┌─────────────────────────┐
+│      Streamlit UI       │
+│  Sidebar: LLM,          │
+│  API keys, use case,    │
+│  timeframe              │
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│   GroqLLM (groqllm.py)  │
+│  Initializes ChatGroq   │
+│  with model + API key   │
+└───────────┬─────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│  GraphBuilder           │
+│  (graph_builder.py)     │
+│  Compiles the right     │
+│  graph per use case     │
+└───────────┬─────────────┘
+            │
+      ┌─────┴──────────────────────────────┐
+      │                                    │
+      ▼                                    ▼
+┌─────────────────┐          ┌─────────────────────────┐
+│  Basic Chatbot  │          │    Chatbot With Web     │
+│                 │          │                         │
+│  START          │          │  START                  │
+│    │            │          │    │                    │
+│    ▼            │          │    ▼                    │
+│  chatbot        │          │  chatbot ──► tools      │
+│    │            │          │    ▲           │        │
+│    ▼            │          │    └───────────┘        │
+│   END           │          │    │                    │
+└─────────────────┘          │    ▼                    │
+                             │   END                   │
+                             └─────────────────────────┘
 
-      User (Browser)
-             │
-             ▼
-┌─────────────────────────────┐
-│     Streamlit UI            │
-│  Sidebar: LLM, API keys,    │
-│  use case, timeframe        │
-└────────────┬────────────────┘
-             │
-             ▼
-┌─────────────────────────────┐
-│     GroqLLM (groqllm.py)    │
-│  Initializes ChatGroq with  │
-│  selected model + API key   │
-└────────────┬────────────────┘
-             │
-             ▼
-┌─────────────────────────────┐
-│   GraphBuilder              │
-│  (graph_builder.py)         │
-│  Compiles the right graph   │
-│  for the selected use case  │
-└────────────┬────────────────┘
-             │
-      ┌──────┴──────────────────────────┐
-      │                                 │
-      ▼                                 ▼
-┌───────────────────┐     ┌─────────────────────────┐
-│  Basic Chatbot    │     │  Chatbot With Web       │
-│                   │     │                         │
-│  START            │     │  START                  │
-│    │              │     │    │                    │
-│    ▼              │     │    ▼                    │
-│  chatbot          │     │  chatbot ──► tools      │
-│    │              │     │    ▲           │        │
-│    ▼              │     │    └───────────┘        │
-│   END             │     │    │                    │
-└───────────────────┘     │    ▼                    │
-                          │   END                   │
-                          └─────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│  AI News Pipeline                                    │
+│                                                      │
+│  START → fetch_news → summarize_news →               │
+│          save_result → END                           │
+└──────────────────────────────────────────────────────┘
+            │
+            ▼
+┌─────────────────────────┐
+│  DisplayResultStreamlit │
+│  Renders output per     │
+│  use case in UI         │
+└─────────────────────────┘
+```
 
-┌─────────────────────────────────────────────────────┐──┐
-│  AI News Pipeline                                      │
-│                                                        │
-│START → fetch_news → summarize_news → save_result → END │
-└─────────────────────────────────────────────────────┘──┐
-                        │
-                        ▼
-            ┌─────────────────────────────┐
-            │  DisplayResultStreamlit     │
-            │  Renders output per         │
-            │  use case in Streamlit UI   │
-            └─────────────────────────────┘
-
-
-For the full design — state schema, node logic, routing conditions, and UI config system — see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ---
 
@@ -166,19 +167,6 @@ AgenticChatbot/
             └── streamlitui/
                 ├── loadui.py           # Sidebar controls and session state
                 └── display_result.py   # Renders output per use case
-
----
-
-## 📚 Technology Stack
-
-| Component | Technology | Purpose |
-|---|---|---|
-| Agentic Workflow | [LangGraph]| Stateful graph orchestration, node routing, loops |
-| LLM Framework | [LangChain] | LLM abstraction, prompts, message types |
-| LLM Provider | [Groq — ChatGroq] | Fast LLM inference, free tier available |
-| Web Search | [Tavily] | Real-time news and web search API |
-| UI | [Streamlit] | Web application interface |
-| LangChain Tavily | [langchain-tavily]| LangChain-compatible Tavily tool wrapper |
 
 ---
 
@@ -288,7 +276,7 @@ Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for how to g
 
 **Shivam Singh**
 
-- GitHub: @ssinghdev1
+- GitHub: https://github.com/ssinghdev1
 - Project: Agentic AI Project
 
 ---
