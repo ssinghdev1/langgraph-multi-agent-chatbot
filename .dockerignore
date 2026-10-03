@@ -1,0 +1,26 @@
+# Virtual environment - Docker installs fresh from requirements.txt
+venv/
+
+# Python cache files - not needed in container
+__pycache__/
+*.pyc
+*.pyo
+
+# Real API keys - NEVER put in Docker image
+.env
+
+# Git files - not needed in container
+.git/
+.gitignore
+
+# Documentation - not needed to run app
+*.md
+README.md
+ARCHITECTURE.md
+CONTRIBUTING.md
+
+# Docs folder
+docs/
+
+# AI News output files (generated at runtime, not needed in image)
+AINews/
